@@ -12,12 +12,28 @@ a webserver, this will provide the WSGI interface, otherwise, we're going
 to start a web server."""
 
 import sys
-if sys.version_info <= (3, 9):
-    import select
+from flask import Flask, render_template
+from flask_socketio import SocketIO
+import os
+# ✅ Initialize SocketIO
+socketio = SocketIO()
+TEMPLATE_DIR = os.path.abspath('web/pgadmin/templates')
 
+BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+
+# Define the absolute path to the templates folder
+TEMPLATE_DIR = os.path.join(BASE_DIR, 'pgadmin', 'templates')
+STATIC_DIR = os.path.join(BASE_DIR, 'pgadmin', 'static')
+
+app = Flask(
+    __name__,
+    static_url_path='/static',
+    static_folder=STATIC_DIR,    # Explicit static path
+    template_folder=TEMPLATE_DIR  # Explicit template path
+)
 if sys.version_info < (3, 8):
-    raise RuntimeError('This application must be run under Python 3.8 '
-                       'or later.')
+    raise RuntimeError('This application must be run under Python 3.8 or later.')
+
 import builtins
 import os
 
@@ -37,10 +53,7 @@ else:
 
 import config
 import setup
-from pgadmin import create_app, socketio
 from pgadmin.utils.constants import INTERNAL
-# Get the config database schema version. We store this in pgadmin.model
-# as it turns out that putting it in the config files isn't a great idea
 from pgadmin.model import SCHEMA_VERSION
 
 
@@ -50,7 +63,6 @@ from pgadmin.model import SCHEMA_VERSION
 class ReverseProxied():
     def __init__(self, app):
         self.app = app
-        # https://werkzeug.palletsprojects.com/en/0.15.x/middleware/proxy_fix
         try:
             from werkzeug.middleware.proxy_fix import ProxyFix
             self.app = ProxyFix(app,
@@ -58,8 +70,7 @@ class ReverseProxied():
                                 x_proto=config.PROXY_X_PROTO_COUNT,
                                 x_host=config.PROXY_X_HOST_COUNT,
                                 x_port=config.PROXY_X_PORT_COUNT,
-                                x_prefix=config.PROXY_X_PREFIX_COUNT
-                                )
+                                x_prefix=config.PROXY_X_PREFIX_COUNT)
         except ImportError:
             pass
 
@@ -87,20 +98,20 @@ if not os.path.isfile(config.SQLITE_PATH):
     setup_db_required = True
 
 ##########################################################################
-# Create the app and configure it. It is created outside main so that
-# it can be imported
+# Create the app and configure it
 ##########################################################################
-app = create_app()
+
+# ✅ Attach SocketIO to the app
+socketio.init_app(app)
+
 app.config['sessions'] = dict()
 
-# We load the file here instead of evaluate config
-# as we don't know the path of this file in evaluate config
-# commit_hash file resides in the web directory
+# Load the commit hash
 try:
     with open(os.path.join(os.path.dirname(os.path.realpath(__file__)),
                            'commit_hash')) as f:
         config.COMMIT_HASH = f.readline().strip()
-except FileNotFoundError as _:
+except FileNotFoundError:
     config.COMMIT_HASH = None
 
 if setup_db_required:
@@ -108,42 +119,21 @@ if setup_db_required:
 
 # Authentication sources
 if len(config.AUTHENTICATION_SOURCES) > 0:
-    # Creating a temporary auth source list removing INTERNAL
-    # This change is done to avoid selecting INTERNAL authentication when user
-    # mistakenly keeps that the first option.
-    auth_source = [x for x in config.AUTHENTICATION_SOURCES
-                   if x != INTERNAL]
-    app.PGADMIN_EXTERNAL_AUTH_SOURCE = auth_source[0] \
-        if len(auth_source) > 0 else INTERNAL
+    auth_source = [x for x in config.AUTHENTICATION_SOURCES if x != INTERNAL]
+    app.PGADMIN_EXTERNAL_AUTH_SOURCE = auth_source[0] if len(auth_source) > 0 else INTERNAL
 else:
     app.PGADMIN_EXTERNAL_AUTH_SOURCE = INTERNAL
 
-# Start the web server. The port number should have already been set by the
-# runtime if we're running in desktop mode, otherwise we'll just use the
-# Flask default.
+# Set server properties
 app.PGADMIN_RUNTIME = False
-app.logger.debug(
-    'Config server mode: %s', config.SERVER_MODE
-)
-config.EFFECTIVE_SERVER_PORT = None
-if 'PGADMIN_INT_PORT' in os.environ:
-    port = os.environ['PGADMIN_INT_PORT']
-    app.logger.debug(
-        'Running under the desktop runtime, port: %s',
-        port
-    )
-    config.EFFECTIVE_SERVER_PORT = int(port)
-else:
-    app.logger.debug(
-        'Not running under the desktop runtime, port: %s',
-        config.DEFAULT_SERVER_PORT
-    )
-    config.EFFECTIVE_SERVER_PORT = config.DEFAULT_SERVER_PORT
+app.logger.debug('Config server mode: %s', config.SERVER_MODE)
+config.EFFECTIVE_SERVER_PORT = config.DEFAULT_SERVER_PORT
 
-# Set the key if appropriate
+# Handle runtime environment variables
+if 'PGADMIN_INT_PORT' in os.environ:
+    config.EFFECTIVE_SERVER_PORT = int(os.environ['PGADMIN_INT_PORT'])
 if 'PGADMIN_INT_KEY' in os.environ:
     app.PGADMIN_INT_KEY = os.environ['PGADMIN_INT_KEY']
-    app.logger.debug("Desktop security key: %s" % app.PGADMIN_INT_KEY)
     app.PGADMIN_RUNTIME = True
 else:
     app.PGADMIN_INT_KEY = ''
@@ -151,79 +141,43 @@ else:
 if not app.PGADMIN_RUNTIME:
     app.wsgi_app = ReverseProxied(app.wsgi_app)
 
-app.run_before_app_start()
+##########################################################################
+# Routes
+##########################################################################
+@app.route('/')
+def index():
+    """Render base.html"""
+    return render_template('base.html')
 
 
 ##########################################################################
-# The entry point
+# Main entry point
 ##########################################################################
 def main():
-    # Set null device file path to stdout, stdin, stderr if they are None
-    for _name in ('stdin', 'stdout', 'stderr'):
-        if getattr(sys, _name) is None:
-            setattr(sys, _name,
-                    open(os.devnull, 'r' if _name == 'stdin' else 'w'))
-
-    # Output a startup message if we're not under the runtime and startup.
-    # If we're under WSGI, we don't need to worry about this
-    if not app.PGADMIN_RUNTIME:
-        print(
-            "Starting %s. Please navigate to http://%s:%d in your browser." %
-            (config.APP_NAME, config.DEFAULT_SERVER,
-             config.EFFECTIVE_SERVER_PORT)
-        )
-        sys.stdout.flush()
-    else:
-        # For unknown reason the runtime does not pass the environment
-        # variables (i.e. PYTHONHOME, and PYTHONPATH), to the Python
-        # sub-processes, leading to failures executing background processes.
-        #
-        # This has been observed only on windows. On *nix systems, it is likely
-        # picking the system python environment, which is good enough to run
-        # the process-executor.
-        #
-        # Setting PYTHONHOME launch them properly.
-        from pgadmin.utils import IS_WIN
-
-        if IS_WIN:
-            os.environ['PYTHONHOME'] = sys.prefix
-
-    # Initialize Flask service only once
-    # If `WERKZEUG_RUN_MAIN` is None, i.e: app is initializing for first time
-    # so set `use_reloader` = False, thus reload won't call.
-    # Reference:
-    # https://github.com/pallets/werkzeug/issues/220#issuecomment-11176538
+    """Start the server."""
     try:
         if config.DEBUG:
-            app.run(
+            socketio.run(
+                app,
                 host=config.DEFAULT_SERVER,
                 port=config.EFFECTIVE_SERVER_PORT,
                 debug=config.DEBUG,
-                use_reloader=(
-                    (not app.PGADMIN_RUNTIME) and
-                    os.environ.get("WERKZEUG_RUN_MAIN") is not None
-                ),
-                threaded=config.THREADED_MODE
+                use_reloader=False,
+                allow_unsafe_werkzeug=True
             )
         else:
-            try:
-                socketio.run(
-                    app,
-                    debug=config.DEBUG,
-                    allow_unsafe_werkzeug=True,
-                    host=config.DEFAULT_SERVER,
-                    port=config.EFFECTIVE_SERVER_PORT,
-                )
-            except KeyboardInterrupt:
-                print("CLOSE SERVER")
-                socketio.stop()
-
-    except IOError:
-        app.logger.error("Error starting the app server: %s", sys.exc_info())
+            socketio.run(
+                app,
+                host=config.DEFAULT_SERVER,
+                port=config.EFFECTIVE_SERVER_PORT,
+                debug=False,
+                allow_unsafe_werkzeug=True
+            )
+    except KeyboardInterrupt:
+        print("Server stopped.")
+        socketio.stop()
 
 
-##########################################################################
-# Server startup
-##########################################################################
+# Run the server
 if __name__ == '__main__':
     main()

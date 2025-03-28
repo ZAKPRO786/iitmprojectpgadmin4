@@ -9,7 +9,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
 
     <!-- To set pgAdmin4 shortcut icon in browser -->
-    <link rel="shortcut icon" href="{{ url_for('redirects.favicon') }}"/>
+   <link rel="shortcut icon" href="{{ url_for('static', filename='favicon.ico') }}"/>
+
     <style>
         .pg-sp-container {
             position: absolute;
@@ -62,12 +63,13 @@
                     sources: "{{ url_for('static', filename='js') }}",
                     datagrid: "{{ url_for('static', filename='js/generated/datagrid') }}",
                     sqleditor: "{{ url_for('static', filename='js/generated/sqleditor') }}",
-                    'pgadmin.browser.utils': "{{ url_for('browser.index') }}" + "js/utils",
-                    'pgadmin.browser.endpoints': "{{ url_for('browser.index') }}" + "js/endpoints",
-                    'pgadmin.browser.messages': "{{ url_for('browser.index') }}" + "js/messages",
-                    'pgadmin.server.supported_servers': "{{ url_for('browser.index') }}" + "server/supported_servers",
-                    'pgadmin.user_management.current_user': "{{ url_for('user_management.index') }}" + "current_user",
-                    'translations': "{{ url_for('tools.index') }}" + "translations",
+                    'pgadmin.browser.utils': "/browser/js/utils",
+'pgadmin.browser.endpoints': "/browser/js/endpoints",
+'pgadmin.browser.messages': "/browser/js/messages",
+'pgadmin.server.supported_servers': "/browser/server/supported_servers",
+'pgadmin.user_management.current_user': "/user_management/current_user",
+'translations': "/tools/translations",
+
                     'security.pages': "{{ url_for('static', filename='js/generated/security.pages') }}"
                 }
             });
